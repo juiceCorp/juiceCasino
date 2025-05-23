@@ -1,24 +1,34 @@
 local SERVER_ID = 10
 rednet.open("back") 
 
-local function db_get(username)
-    rednet.send(SERVER_ID, textutils.serialize({action="get", username=username}), "db")
-    local _, msg = rednet.receive("db", 2)
-    if msg then return textutils.unserialize(msg) end
-end
-
-local function db_set(username, data)
-    rednet.send(SERVER_ID, textutils.serialize({action="set", username=username, data=data}), "db")
-    local _, msg = rednet.receive("db", 2)
-    return msg == "OK"
-end
-
--- Load current user
+-- Load current user and session token
 local userFile = fs.open("current_user.txt", "r")
 local username = userFile.readAll()
 userFile.close()
+local tokenFile = fs.open("session_token.txt", "r")
+local session_token = tokenFile.readAll()
+tokenFile.close()
 
 local BALANCE_MIN = 10
+
+local function db_get(username)
+    rednet.send(SERVER_ID, textutils.serialize({action="get", username=username, token=session_token}), "db")
+    local _, msg = rednet.receive("db", 2)
+    if msg then
+        local res = textutils.unserialize(msg)
+        if res and res.status == "ok" then return res.data end
+    end
+end
+
+local function db_set(username, data)
+    rednet.send(SERVER_ID, textutils.serialize({action="set", username=username, token=session_token, data=data}), "db")
+    local _, msg = rednet.receive("db", 2)
+    if msg then
+        local res = textutils.unserialize(msg)
+        return res and res.status == "ok"
+    end
+end
+
 local userData = db_get(username)
 local balance = userData and userData.balance or 100
 
