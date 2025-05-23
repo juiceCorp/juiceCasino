@@ -1,17 +1,46 @@
--- roulette_client.lua (no wheel visual)
-
+local hmac_util = require("hmacUtil")
 rednet.open("back")
-local SERVER_ID = 10 -- Use your DB server ID
+local SERVER_ID = 10
 
--- Load current user and session token
-local userFile = fs.open("current_user.txt", "r")
-local USERNAME = userFile.readAll()
-userFile.close()
-local tokenFile = fs.open("session_token.txt", "r")
-local SESSION_TOKEN = tokenFile.readAll()
-tokenFile.close()
+local function loadSession()
+    local userFile = fs.open("current_user.txt", "r")
+    local username = userFile.readAll()
+    userFile.close()
+    local tokenFile = fs.open("session_token.txt", "r")
+    local tokenData = textutils.unserialize(tokenFile.readAll())
+    tokenFile.close()
+    local session_token = type(tokenData) == "table" and tokenData.token or tokenData
+    return username, session_token
+end
 
--- Utils
+local function sendSecureRequest(data)
+    local username, session_token = loadSession()
+    data.username = username
+    data.token = session_token
+    local payload = textutils.serialize(data)
+    local hmac = hmac_util.hmac(payload, hmac_util.SECRET_KEY)
+    local msg = textutils.serialize({payload=payload, hmac=hmac})
+    rednet.send(SERVER_ID, msg, "db")
+    local senderId, response = rednet.receive("db", 5)
+    if senderId == SERVER_ID and response then
+        local res = textutils.unserialize(response)
+        return res
+    end
+end
+
+local function get_balance()
+    local res = sendSecureRequest({action="get"})
+    if res and res.status == "ok" and res.data and res.data.balance then
+        return res.data.balance
+    end
+    return 0
+end
+
+local function update_balance(newBal, reason)
+    local res = sendSecureRequest({action="set", data={balance=newBal}})
+    return res and res.status == "ok"
+end
+
 local sleep = function(seconds)
     local start = os.clock()
     while os.clock() - start <= seconds do end
@@ -27,51 +56,20 @@ local typePrint = function(text, speed)
     print()
 end
 
--- Constants
 local RED_NUMBERS = {
   [1]=true,[3]=true,[5]=true,[7]=true,[9]=true,[12]=true,
   [14]=true,[16]=true,[18]=true,[19]=true,[21]=true,[23]=true,
   [25]=true,[27]=true,[30]=true,[32]=true,[34]=true,[36]=true
 }
 
--- Helpers
 local function getColor(num)
     if num == 0 then return "green"
     elseif RED_NUMBERS[num] then return "red"
     else return "black" end
 end
 
--- User data
-local BALANCE = 0
-
-local function sendRequest(data)
-    data.username = USERNAME
-    data.token = SESSION_TOKEN
-    rednet.send(SERVER_ID, textutils.serialize(data), "db")
-    local senderId, response = rednet.receive("db", 5)
-    if senderId == SERVER_ID and response then
-        local res = textutils.unserialize(response)
-        return res
-    end
-end
-
-local function get_balance()
-    local res = sendRequest({action="get"})
-    if res and res.status == "ok" and res.data and res.data.balance then
-        return res.data.balance
-    end
-    return 0
-end
-
-local function update_balance(newBal, reason)
-    local res = sendRequest({action="set", data={balance=newBal}})
-    if res and res.status == "ok" then BALANCE = newBal return true end
-    return false
-end
-
--- Game loop
 local function roulette_game()
-    BALANCE = get_balance()
+    local BALANCE = get_balance()
     while true do
         typePrint("\nYour balance: $" .. BALANCE)
         print("1) Odd / Even")
@@ -135,5 +133,5 @@ local function roulette_game()
     end
 end
 
--- Start
 roulette_game()
+shell.run("signin.lua")
