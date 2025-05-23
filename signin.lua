@@ -1,23 +1,23 @@
 local SERVER_ID = 10
 rednet.open("back")
 
--- List of valid application names (without .lua extension)
 local VALID_APPS = {
     "blackjack",
     "kekRoulette",
-    -- Add more app names here as you add them
 }
 
-local function db_get(username)
-    rednet.send(SERVER_ID, textutils.serialize({action="get", username=username}), "db")
+local session_token = nil
+
+local function db_login(username, password)
+    rednet.send(SERVER_ID, textutils.serialize({action="login", username=username, password=password}), "db")
     local _, msg = rednet.receive("db", 2)
     if msg then return textutils.unserialize(msg) end
 end
 
-local function db_set(username, data)
-    rednet.send(SERVER_ID, textutils.serialize({action="set", username=username, data=data}), "db")
+local function db_create(username, password)
+    rednet.send(SERVER_ID, textutils.serialize({action="create", username=username, data={password=password, userid=tostring(math.random(100000,999999)), balance=100}}), "db")
     local _, msg = rednet.receive("db", 2)
-    return msg == "OK"
+    if msg then return textutils.unserialize(msg) end
 end
 
 local function db_exists(username)
@@ -44,15 +44,21 @@ local function createAccount()
         else
             term.write("Choose a password: ")
             local password = read("*")
-            local userid = tostring(math.random(100000, 999999))
-            local data = {
-                password = password,
-                userid = userid,
-                balance = 100
-            }
-            db_set(username, data)
-            print("Account created! Your user ID is: " .. userid)
-            return username
+            local res = db_create(username, password)
+            if res and res.status == "ok" then
+                print("Account created! Logging in...")
+                -- Immediately log in after account creation
+                local loginRes = db_login(username, password)
+                if loginRes and loginRes.status == "ok" then
+                    session_token = loginRes.token
+                    return username, password
+                else
+                    print("Login failed after account creation.")
+                    return nil
+                end
+            else
+                print("Account creation failed.")
+            end
         end
     end
 end
@@ -61,10 +67,11 @@ local function signIn()
     print("=== Sign In ===")
     for _ = 1, 3 do
         local username, password = promptCredentials()
-        local data = db_get(username)
-        if data and data.password == password then
+        local res = db_login(username, password)
+        if res and res.status == "ok" then
             print("Welcome, " .. username .. "!")
-            return username
+            session_token = res.token
+            return username, password
         else
             print("Invalid credentials. Try again.")
         end
@@ -82,7 +89,6 @@ local function mainMenu()
     return choice
 end
 
--- Find available applications
 local function getAvailableApps()
     local apps = {}
     for _, app in ipairs(VALID_APPS) do
@@ -93,8 +99,7 @@ local function getAvailableApps()
     return apps
 end
 
--- App launcher menu
-local function appLauncher(username)
+local function appLauncher(username, password)
     while true do
         local apps = getAvailableApps()
         if #apps == 0 then
@@ -114,12 +119,14 @@ local function appLauncher(username)
         end
         local idx = tonumber(choice)
         if idx and apps[idx] then
-            -- Save username for the app
+            -- Save username and session token for the app
             local userFile = fs.open("current_user.txt", "w")
             userFile.write(username)
             userFile.close()
+            local tokenFile = fs.open("session_token.txt", "w")
+            tokenFile.write(session_token)
+            tokenFile.close()
             shell.run(apps[idx] .. ".lua")
-            -- After the app exits, return to launcher
         else
             print("Invalid selection.")
         end
@@ -127,16 +134,16 @@ local function appLauncher(username)
 end
 
 -- Main logic
-local username
+local username, password
 while not username do
     local choice = mainMenu()
     if choice == "1" then
-        username = signIn()
+        username, password = signIn()
     elseif choice == "2" then
-        username = createAccount()
+        username, password = createAccount()
     else
         print("Invalid option.")
     end
 end
 
-appLauncher(username)
+appLauncher(username, password)
