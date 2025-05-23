@@ -1,7 +1,15 @@
 -- roulette_client.lua (no wheel visual)
 
-rednet.open("back") -- Adjust as needed
-local SERVER_ID = 11 -- Replace with actual storage_server Rednet ID
+rednet.open("back")
+local SERVER_ID = 10 -- Use your DB server ID
+
+-- Load current user and session token
+local userFile = fs.open("current_user.txt", "r")
+local USERNAME = userFile.readAll()
+userFile.close()
+local tokenFile = fs.open("session_token.txt", "r")
+local SESSION_TOKEN = tokenFile.readAll()
+tokenFile.close()
 
 -- Utils
 local sleep = function(seconds)
@@ -34,59 +42,36 @@ local function getColor(num)
 end
 
 -- User data
-local USERNAME, PIN, BALANCE = nil, nil, 0
+local BALANCE = 0
 
 local function sendRequest(data)
-    rednet.send(SERVER_ID, data)
-    local senderId, response = rednet.receive(5)
-    if senderId == SERVER_ID then return response end
-end
-
--- Auth
-local function sign_in()
-    print("\n=== SIGN IN ===")
-    io.write("Username: ")
-    USERNAME = string.lower(read())
-    io.write("PIN: ")
-    PIN = read("*")
-
-    local res = sendRequest({action="get", user=USERNAME, pin=PIN})
-    if res and res.status == "ok" then
-        BALANCE = res.balance or 100
-        typePrint("Welcome back, " .. USERNAME .. "!")
-        return true
-    else
-        typePrint("Login failed: " .. (res and res.reason or "No response"))
-        return false
+    data.username = USERNAME
+    data.token = SESSION_TOKEN
+    rednet.send(SERVER_ID, textutils.serialize(data), "db")
+    local senderId, response = rednet.receive("db", 5)
+    if senderId == SERVER_ID and response then
+        local res = textutils.unserialize(response)
+        return res
     end
 end
 
-local function create_account()
-    print("\n=== CREATE ACCOUNT ===")
-    io.write("Choose a username: ")
-    USERNAME = string.lower(read())
-    io.write("Set a PIN: ")
-    PIN = read("*")
-    BALANCE = 100
-
-    local res = sendRequest({action="update", user=USERNAME, pin=PIN, balance=BALANCE})
-    if res and res.status == "ok" then
-        typePrint("Account created! Welcome, " .. USERNAME)
-        return true
-    else
-        typePrint("Account creation failed.")
-        return false
+local function get_balance()
+    local res = sendRequest({action="get"})
+    if res and res.status == "ok" and res.data and res.data.balance then
+        return res.data.balance
     end
+    return 0
 end
 
 local function update_balance(newBal, reason)
-    local res = sendRequest({action="update", user=USERNAME, pin=PIN, balance=newBal, reason=reason})
+    local res = sendRequest({action="set", data={balance=newBal}})
     if res and res.status == "ok" then BALANCE = newBal return true end
     return false
 end
 
 -- Game loop
 local function roulette_game()
+    BALANCE = get_balance()
     while true do
         typePrint("\nYour balance: $" .. BALANCE)
         print("1) Odd / Even")
@@ -151,15 +136,4 @@ local function roulette_game()
 end
 
 -- Start
-while true do
-    print("\nWelcome to Roulette!")
-    print("1) Sign In")
-    print("2) Create Account")
-    io.write("Choice: ")
-    local c = read()
-    if c == "1" and sign_in() then break
-    elseif c == "2" and create_account() then break
-    else print("Try again.") end
-end
-
 roulette_game()
