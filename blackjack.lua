@@ -270,7 +270,7 @@ while true do
     end
     io.write("\nAgain? (y/n) ")
     if io.read():lower() ~= "y" then
-        shell.run("startup.lua")
+        shell.run("signin.lua")
         return
     end
 end
@@ -278,5 +278,5 @@ end
 typePrint("\nThanks for playing!", 0.02)
 print()
 print()
-shell.run("startup.lua")
+shell.run("signin.lua")
 print()
