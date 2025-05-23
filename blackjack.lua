@@ -1,36 +1,40 @@
+local hmac_util = require("hmacUtil")
 local SERVER_ID = 10
 rednet.open("back") 
 
--- Load current user and session token
-local userFile = fs.open("current_user.txt", "r")
-local username = userFile.readAll()
-userFile.close()
-local tokenFile = fs.open("session_token.txt", "r")
-local session_token = tokenFile.readAll()
-tokenFile.close()
-
 local BALANCE_MIN = 10
 
-local function db_get(username)
-    rednet.send(SERVER_ID, textutils.serialize({action="get", username=username, token=session_token}), "db")
-    local _, msg = rednet.receive("db", 2)
-    if msg then
-        local res = textutils.unserialize(msg)
-        if res and res.status == "ok" then return res.data end
+local function loadSession()
+    local userFile = fs.open("current_user.txt", "r")
+    local username = userFile.readAll()
+    userFile.close()
+    local tokenFile = fs.open("session_token.txt", "r")
+    local tokenData = textutils.unserialize(tokenFile.readAll())
+    tokenFile.close()
+    local session_token = type(tokenData) == "table" and tokenData.token or tokenData
+    return username, session_token
+end
+
+local function sendSecureRequest(data)
+    local payload = textutils.serialize(data)
+    local hmac = hmac_util.hmac(payload, hmac_util.SECRET_KEY)
+    local msg = textutils.serialize({payload=payload, hmac=hmac})
+    rednet.send(SERVER_ID, msg, "db")
+    local _, response = rednet.receive("db", 5)
+    if response then
+        return textutils.unserialize(response)
     end
 end
 
-local function db_set(username, data)
-    rednet.send(SERVER_ID, textutils.serialize({action="set", username=username, token=session_token, data=data}), "db")
-    local _, msg = rednet.receive("db", 2)
-    if msg then
-        local res = textutils.unserialize(msg)
-        return res and res.status == "ok"
-    end
+local function db_get(username, session_token)
+    local res = sendSecureRequest({action="get", username=username, token=session_token})
+    if res and res.status == "ok" then return res.data end
 end
 
-local userData = db_get(username)
-local balance = userData and userData.balance or 100
+local function db_set(username, session_token, data)
+    local res = sendSecureRequest({action="set", username=username, token=session_token, data=data})
+    return res and res.status == "ok"
+end
 
 local sleep = function(seconds)
     local start = os.clock()
@@ -115,11 +119,11 @@ end
 
 local function revealDealerCard(card)
     typePrint("Dealer shows: " .. card.rank .. " of " .. card.suit, 0.01)
-    print()  -- New line
+    print()
     sleep(0.3)
 end
 
-local function getBet()
+local function getBet(balance)
     while true do
         typePrint(string.format("\nYour balance: $%d", balance), 0.02)
         io.write(string.format("\nEnter your bet ($%d - $%d): ", BALANCE_MIN, balance))
@@ -134,16 +138,20 @@ local function getBet()
     end
 end
 
-local function saveBalance()
-    userData.balance = balance
-    db_set(username, userData)
-end
-
 local function playBlackjack()
+    local username, session_token = loadSession()
+    local userData = db_get(username, session_token)
+    if not userData then
+        print("Session expired or invalid. Returning to portal...")
+        sleep(1)
+        return false
+    end
+    local balance = userData.balance or 100
+
     instantPrint("\nBLACKJACK")
     instantPrint("----------")
 
-    local bet = getBet()
+    local bet = getBet(balance)
 
     newDeck()
     shuffleDeck()
@@ -169,7 +177,8 @@ local function playBlackjack()
             print()
             balance = balance - bet
             balanceChange = -bet
-            saveBalance()
+            userData.balance = balance
+            db_set(username, session_token, userData)
             if balanceChange > 0 then
                 typePrint(string.format("You won $%d this round.", balanceChange), 0.02)
             elseif balanceChange < 0 then
@@ -180,7 +189,7 @@ local function playBlackjack()
             print()
             typePrint(string.format("Your balance is now: $%d", balance), 0.02)
             print()
-            return
+            return true
         end
 
         instantPrint("\nDEALER SHOWS:")
@@ -247,11 +256,11 @@ local function playBlackjack()
     else
         typePrint("Push. Tie game.", 0.03)
         balanceChange = 0
-        -- No balance change
     end
     print()
 
-    saveBalance()
+    userData.balance = balance
+    db_set(username, session_token, userData)
 
     if balanceChange > 0 then
         typePrint(string.format("You won $%d this round.", balanceChange), 0.02)
@@ -263,25 +272,17 @@ local function playBlackjack()
     print()
     typePrint(string.format("Your balance is now: $%d", balance), 0.02)
     print()
+    return true
 end
 
--- Game loop
 while true do
-    if balance < BALANCE_MIN then
-        typePrint("\nBankrupt!", 0.03)
-        print()
-        break
-    end
-    playBlackjack()
-    if balance < BALANCE_MIN then
-        typePrint("\nBankrupt!", 0.03)
-        print()
+    local keepPlaying = playBlackjack()
+    if not keepPlaying then
         break
     end
     io.write("\nAgain? (y/n) ")
     if io.read():lower() ~= "y" then
-        shell.run("signin.lua")
-        return
+        break
     end
 end
 
