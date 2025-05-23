@@ -1,5 +1,12 @@
 local SERVER_ID = 10
-rednet.open("back") 
+rednet.open("back")
+
+-- List of valid application names (without .lua extension)
+local VALID_APPS = {
+    "blackjack",
+    "kekRoulette",
+    -- Add more app names here as you add them
+}
 
 local function db_get(username)
     rednet.send(SERVER_ID, textutils.serialize({action="get", username=username}), "db")
@@ -67,7 +74,7 @@ local function signIn()
 end
 
 local function mainMenu()
-    print("Welcome to Blackjack!")
+    print("Welcome to the J.U.I.C.E Login Portal!")
     print("[1] Sign In")
     print("[2] Create Account")
     term.write("Choose an option: ")
@@ -75,6 +82,51 @@ local function mainMenu()
     return choice
 end
 
+-- Find available applications
+local function getAvailableApps()
+    local apps = {}
+    for _, app in ipairs(VALID_APPS) do
+        if fs.exists(app .. ".lua") then
+            table.insert(apps, app)
+        end
+    end
+    return apps
+end
+
+-- App launcher menu
+local function appLauncher(username)
+    while true do
+        local apps = getAvailableApps()
+        if #apps == 0 then
+            print("No available applications found.")
+            return
+        end
+        print("\nAvailable Applications:")
+        for i, app in ipairs(apps) do
+            print(string.format("[%d] %s", i, app))
+        end
+        print("[Q] Quit")
+        term.write("Select an application to launch: ")
+        local choice = read()
+        if choice:lower() == "q" then
+            print("Goodbye!")
+            return
+        end
+        local idx = tonumber(choice)
+        if idx and apps[idx] then
+            -- Save username for the app
+            local userFile = fs.open("current_user.txt", "w")
+            userFile.write(username)
+            userFile.close()
+            shell.run(apps[idx] .. ".lua")
+            -- After the app exits, return to launcher
+        else
+            print("Invalid selection.")
+        end
+    end
+end
+
+-- Main logic
 local username
 while not username do
     local choice = mainMenu()
@@ -87,8 +139,4 @@ while not username do
     end
 end
 
-local userFile = fs.open("current_user.txt", "w")
-userFile.write(username)
-userFile.close()
-
-shell.run("blackjack.lua")
+appLauncher(username)
