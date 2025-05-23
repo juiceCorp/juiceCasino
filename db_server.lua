@@ -1,3 +1,5 @@
+local hmac_util = require("hmacUtil")
+
 local DATABASE_PATH = "database.json"
 local SESSIONS_PATH = "sessions.json"
 
@@ -48,18 +50,29 @@ local function generateToken()
     return t
 end
 
-rednet.open("back") -- Change to your modem side
+rednet.open("back")
 
 print("Database server started.")
 while true do
     local senderId, message, protocol = rednet.receive()
     if protocol == "db" then
-        local req = textutils.unserialize(message)
+        local msgTbl = textutils.unserialize(message)
+        if not msgTbl or not msgTbl.payload or not msgTbl.hmac then
+            rednet.send(senderId, textutils.serialize({status="fail", reason="Malformed request"}), "db")
+            goto continue
+        end
+        -- HMAC check
+        if hmac_util.hmac(msgTbl.payload, hmac_util.SECRET_KEY) ~= msgTbl.hmac then
+            print("[SECURITY] Invalid HMAC from computer", senderId)
+            rednet.send(senderId, textutils.serialize({status="fail", reason="Invalid HMAC"}), "db")
+            goto continue
+        end
+
+        local req = textutils.unserialize(msgTbl.payload)
         local db = loadDatabase()
         local sessions = loadSessions()
 
         if req.action == "login" then
-            -- Authenticate user and generate session token
             local user = db[req.username]
             if user and user.password == req.password then
                 local token = generateToken()
@@ -79,7 +92,6 @@ while true do
             rednet.send(senderId, textutils.serialize({status="ok"}), "db")
 
         elseif req.action == "get" or req.action == "set" then
-            -- Session token required
             if not (req.username and req.token and sessions[req.username] == req.token) then
                 print(string.format("[SECURITY] Invalid or missing session for '%s' from computer %d", tostring(req.username), senderId))
                 rednet.send(senderId, textutils.serialize({status="fail", reason="Invalid session"}), "db")
@@ -128,5 +140,6 @@ while true do
         else
             print("[UNKNOWN ACTION]", req.action)
         end
+        ::continue::
     end
 end
